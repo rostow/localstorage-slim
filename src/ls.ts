@@ -45,6 +45,14 @@ const decrypter: Decrypter = (str, key) => {
   return obfus(str, key, false);
 };
 
+// Callback polling
+let cbRefs: NodeJS.Timeout[] = [];
+const poll = (): void => {
+  cbRefs.forEach((ref) => clearTimeout(ref));
+  cbRefs = [];
+  flush(false, true);
+};
+
 const config: LocalStorageConfig = {
   ttl: null,
   encrypt: false,
@@ -78,7 +86,16 @@ const set = <T = unknown>(key: string, value: T, localConfig: LocalStorageConfig
       }
     }
 
+    // If a callback was specified store it
+    if (_conf.ttl && APX in (val as Record<string, unknown>) && _conf.cb && typeof _conf.cb === 'function') {
+      (val as Record<string, unknown>).cb = _conf.cb.toString();
+    }
+
     localStorage.setItem(key, JSON.stringify(val));
+
+    if (_conf.ttl && APX in (val as Record<string, unknown>)) {
+      poll();
+    }
   } catch (e) {
     // Sometimes stringify fails due to circular refs
     return false;
@@ -130,7 +147,7 @@ const get = <T = unknown>(key: string, localConfig: LocalStorageConfig = {}): T 
   return item[APX];
 };
 
-const flush = (force = false): false | void => {
+const flush = (force = false, setupCb = false): false | void => {
   if (!supportsLS()) return false;
   Object.keys(localStorage).forEach((key) => {
     const str = localStorage.getItem(key);
@@ -142,9 +159,16 @@ const flush = (force = false): false | void => {
       // Some packages write strings to localStorage that are not converted by JSON.stringify(), so we need to ignore it
       return;
     }
-    // flush only if ttl was set and is/is not expired
-    if (isObject(item) && APX in item && (Date.now() > item.ttl || force)) {
-      localStorage.removeItem(key);
+
+    // if ttl is set
+    if (isObject(item) && APX in item) {
+      // flush if has/has not expired
+      if (Date.now() > item.ttl || force) {
+        localStorage.removeItem(key);
+      } else if (setupCb && item.cb) {
+        // setup callback /** Warning! We are using eval here which could be quite dangerous, @todo: use Function */
+        cbRefs.push(setTimeout(eval(item.cb), item.ttl - Date.now()));
+      }
     }
   });
 };
@@ -166,4 +190,5 @@ export default {
   flush,
   clear,
   remove,
+  poll,
 };
